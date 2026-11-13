@@ -1,0 +1,9 @@
+pandas
+numpy
+scikit-learn
+torch
+gym==0.26.2
+mlflow
+flask
+prometheus_client
+gunicorn

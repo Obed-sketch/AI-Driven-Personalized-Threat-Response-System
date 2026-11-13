@@ -55,3 +55,33 @@ Real-time monitoring: Grafana dashboards for "model adaptation" tracking.
 Scalability: Kubernetes and Docker ensure enterprise-grade deployment.
 Iterative Improvement: Retrain model weekly with new user data.
 This end-to-end pipeline mirrors real-world AI/ML projects at Microsoft, emphasizing security, collaboration, and measurable impact.
+
+---
+
+## Status and how to run (added during code repair, Nov 2026)
+
+This repo is a **design blueprint with a runnable core**:
+
+- **Steps One-Three run**: data preprocessing, the custom Gym RL environment,
+  Q-network training with MLflow logging, and saving `rl_agent.pth`.
+- **Step Four is partially wired**: the Flask `/recommend` endpoint and both
+  policies (RL adapter + rule-based baseline) are defined, but the app is
+  never started in this file.
+- **Step Five is a TODO**: the Dockerfile exists only as comments in the
+  source; Kubernetes/Grafana deployment was never implemented.
+
+```bash
+pip install -r requirements.txt
+python make_sample_data.py   # writes a SYNTHETIC user_interactions.csv
+python "AI_Driven Personalized Threat Response System.py"
+```
+
+Data note: the original `user_interactions.csv` was never committed.
+`make_sample_data.py` generates 120 clearly synthetic rows with the expected
+schema so the pipeline can be run and verified; results on it demonstrate
+nothing about real users. The committed script trains for the author's
+original 1,000 episodes; on a small sample that takes several minutes on CPU.
+
+Naming note: the repo name ends in `.py` and the main filename contains
+spaces -- renaming both (repo: `AI-Driven-Personalized-Threat-Response-System`,
+file: underscores) would be more conventional.

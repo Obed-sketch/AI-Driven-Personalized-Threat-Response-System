@@ -34,7 +34,12 @@ class SecurityEnv(gym.Env):
         super(SecurityEnv, self).__init__()
         self.data = data
         self.action_space = spaces.Discrete(3)  # Actions: [0=isolate, 1=scan, 2=alert]
-        self.observation_space = spaces.Box(low=0, high=1, shape=(5,))  # Features: query_encoded, feedback, etc.
+        # REPAIR: the observation is the two features actually built in Step One
+        # (query_encoded, feedback_normalized), so the space is shape (2,) with
+        # unbounded range -- query_encoded is an arbitrary integer code and the
+        # normalized feedback can be negative. It was previously declared as
+        # shape (5,) over [0, 1], which matched neither.
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(2,))
 
     def step(self, action):
         # Simulate reward based on threat resolution and feedback
@@ -48,7 +53,11 @@ class SecurityEnv(gym.Env):
         return self._next_observation()
 
     def _next_observation(self):
-        obs = self.data.iloc[self.current_step][["query_encoded", "feedback_normalized", ...]].values
+        # REPAIR: removed the literal "..." (Ellipsis) from the column list --
+        # it made pandas raise a KeyError. Only the two real feature columns
+        # are selected. The .astype(np.float32) is also a repair: a DataFrame
+        # row is object dtype, and torch.FloatTensor() rejects object arrays.
+        obs = self.data.iloc[self.current_step][["query_encoded", "feedback_normalized"]].values.astype(np.float32)
         self.current_step += 1
         return obs
 
@@ -64,8 +73,10 @@ class QNetwork(nn.Module):
         return self.fc2(x)
 
 # STEP THREE Training & Validation
+import mlflow  # REPAIR: mlflow.log_metric() is called below but was never imported
+
 env = SecurityEnv(train_data)
-agent = QNetwork(input_dim=5, output_dim=3)
+agent = QNetwork(input_dim=env.observation_space.shape[0], output_dim=3)  # input_dim now matches the observation space
 optimizer = torch.optim.Adam(agent.parameters(), lr=0.001)
 
 # Training loop
@@ -95,6 +106,32 @@ torch.save(agent.state_dict(), "rl_agent.pth")
 from flask import Flask, request
 import prometheus_client as prom
 
+# REPAIR: the two policies used by the /recommend endpoint were called but
+# never defined anywhere in the file. They are defined here, exactly as the
+# original comments describe them:
+#   * rule_based_policy -- the baseline: always recommend "scan" (action 1).
+#   * RLAgent -- a thin adapter that feeds the request's two features
+#     (query_encoded, feedback_normalized -- the observation schema from
+#     Step Two) through the Q-network trained in Step Three. This adapter is
+#     glue code added during repair; it was assumed by, but absent from, the
+#     original file.
+def rule_based_policy(user_data):
+    return 1  # Baseline: always "scan"
+
+class RLAgent:
+    def __init__(self, network):
+        self.network = network
+
+    def predict(self, user_data):
+        obs = torch.FloatTensor([
+            user_data["query_encoded"],
+            user_data["feedback_normalized"],
+        ])
+        with torch.no_grad():
+            return int(self.network(obs).argmax().item())
+
+rl_agent = RLAgent(agent)
+
 app = Flask(__name__)
 counter_rl = prom.Counter('rl_recommendations', 'RL model recommendations')
 counter_rule = prom.Counter('rule_recommendations', 'Rule-based recommendations')
@@ -112,12 +149,17 @@ def recommend():
     return {"action": action}
 
 # STEP FIVE Deployment & Monitoring
-# Containerize the Flask API:
+# TODO (design step, not yet implemented): containerize the Flask API and add
+# monitoring. The Dockerfile sketched in the original file is kept below as
+# comments -- it was pasted as raw text, which made the whole file a
+# SyntaxError. Note the Flask app above is also never started in this file
+# (there is no app.run() / __main__ runner yet).
+#
 # DOCKERFILE
-FROM python:3.8
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# FROM python:3.8
+# COPY requirements.txt .
+# RUN pip install -r requirements.txt
+# COPY . .
+# CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
 
 
