@@ -58,30 +58,76 @@ This end-to-end pipeline mirrors real-world AI/ML projects at Microsoft, emphasi
 
 ---
 
-## Status and how to run (added during code repair, Nov 2026)
+## Status and how to run (updated during completion, Nov 2026)
 
-This repo is a **design blueprint with a runnable core**:
+All five design steps are now implemented and verified. The original
+single-file script is unchanged in behaviour; its logic was extracted into
+the `threat_response/` package so it can be run, served and tested:
 
-- **Steps One-Three run**: data preprocessing, the custom Gym RL environment,
-  Q-network training with MLflow logging, and saving `rl_agent.pth`.
-- **Step Four is partially wired**: the Flask `/recommend` endpoint and both
-  policies (RL adapter + rule-based baseline) are defined, but the app is
-  never started in this file.
-- **Step Five is a TODO**: the Dockerfile exists only as comments in the
-  source; Kubernetes/Grafana deployment was never implemented.
+- `pipeline.py` / `run_all.py` -- single entry point: preprocessing ->
+  Q-network training -> A/B evaluation -> saved model bundle
+  (`rl_agent_bundle.pt`: weights + feedback scaler + query mapping).
+- `app.py` -- **Step Five, implemented**: Flask serving app loading the
+  bundle (no retraining at serve time). `GET /health`,
+  `POST /recommend` (A/B split between the RL policy and the rule-based
+  baseline, pinnable with `?policy=rl` / `?policy=rule`), `GET /metrics`
+  (the Prometheus counters from the original design).
+- `Dockerfile` + `docker-compose.yml` -- container deployment; the image
+  trains the bundle on the bundled sample data during its build.
+- `tests/` -- pytest suite (preprocessing, environment rewards, agent
+  action validity, both API endpoints).
+
+### Run it
 
 ```bash
 pip install -r requirements.txt
-python make_sample_data.py   # writes a SYNTHETIC user_interactions.csv
-python "AI_Driven Personalized Threat Response System.py"
+python make_sample_data.py        # writes a SYNTHETIC user_interactions.csv
+python run_all.py                 # full pipeline (default: 200 episodes)
+python run_all.py --episodes 1000   # the original script's episode count
+python app.py                     # serve on http://127.0.0.1:5000
+curl http://127.0.0.1:5000/health
+curl -X POST "http://127.0.0.1:5000/recommend?policy=rl" \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "malware alert", "feedback": 4}'
+docker compose up --build         # or the container version
+python -m pytest tests/ -q        # run the tests
 ```
+
+Verified output of `python run_all.py` (200 episodes, the 120-row
+synthetic sample, ~26 s of pipeline time on CPU):
+
+```
+Data: 120 rows (96 train / 24 test)
+Training: 200 episodes, final-episode reward 40.53, mean of last 10 episodes 40.53
+A/B evaluation on the held-out test split (environment reward):
+  RL policy        total 9.47 (mean 0.394/step)
+  Rule-based base. total 9.47 (mean 0.394/step)
+```
+
+All 12 pytest tests pass. The Flask app was also verified live (dev
+server and gunicorn): `/health` returns `{"status": "ok",
+"model_loaded": true}` and `/recommend` returns valid actions.
+Docker itself was **not** executed in the verification environment (no
+Docker available there); the Dockerfile runs exactly the commands verified
+natively above.
+
+**Honest A/B caveat:** the two policies score identically because the
+environment's reward -- as defined in the original script -- does not
+depend on the action taken (reward = threat resolved +/- 1, plus the
+feedback score). The A/B harness therefore verifies the serving split and
+plumbing, not policy quality. Making the reward action-dependent (e.g.
+matching the right response to each threat type) is the obvious next
+improvement. Kubernetes/Grafana from the original Step Five sketch remain
+unimplemented; Docker + the Prometheus `/metrics` endpoint are what was
+built.
 
 Data note: the original `user_interactions.csv` was never committed.
 `make_sample_data.py` generates 120 clearly synthetic rows with the expected
 schema so the pipeline can be run and verified; results on it demonstrate
-nothing about real users. The committed script trains for the author's
-original 1,000 episodes; on a small sample that takes several minutes on CPU.
+nothing about real users. The original script trains for 1,000 episodes;
+`run_all.py` defaults to 200 (a few minutes at most) and accepts
+`--episodes 1000` for the original setting.
 
-Naming note: the repo name ends in `.py` and the main filename contains
-spaces -- renaming both (repo: `AI-Driven-Personalized-Threat-Response-System`,
-file: underscores) would be more conventional.
+Naming note: the main filename contains spaces -- renaming it (file:
+underscores) would be more conventional. (The repo itself has since been
+renamed on GitHub to `AI-Driven-Personalized-Threat-Response-System`.)

@@ -1,0 +1,17 @@
+# Step Five (implemented): one-command deployment of the serving API.
+#   docker compose up --build
+# then: curl http://localhost:5000/health
+#       curl -X POST http://localhost:5000/recommend \
+#         -H 'Content-Type: application/json' \
+#         -d '{"query": "malware alert", "feedback": 4}'
+services:
+  api:
+    build: .
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
