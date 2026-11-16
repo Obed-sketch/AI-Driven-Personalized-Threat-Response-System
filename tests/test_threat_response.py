@@ -18,7 +18,7 @@ from threat_response.agent import (  # noqa: E402
     rule_based_policy,
     train_agent,
 )
-from threat_response.env import SecurityEnv  # noqa: E402
+from threat_response.env import SecurityEnv, response_reward  # noqa: E402
 from threat_response.model_io import load_bundle, save_bundle  # noqa: E402
 from threat_response.preprocessing import (  # noqa: E402
     load_interactions,
@@ -60,14 +60,54 @@ def test_env_reset_and_step(processed):
 
 
 def test_env_reward_matches_first_row(processed):
+    # v2 reward: the environment must score the action actually taken on
+    # the first row (the v1 formula paid out the row's recorded
+    # threat_resolved flag regardless of the action).
     data, _, _ = processed
     env = SecurityEnv(data.head(3))
     env.reset()
     _, reward, *_ = env.step(0)
     first = data.iloc[0]
-    expected = (1.0 if first["threat_resolved"] else -1.0) \
-        + float(first["feedback_normalized"])
+    expected = response_reward(
+        first["query"], 0, first["feedback_normalized"])
     assert reward == pytest.approx(expected)
+
+
+def test_reward_varies_by_action_for_same_context():
+    # The core v2 property (and the v1 bug): for one fixed context, the
+    # reward must depend on the action taken. For a ransomware alert,
+    # "isolate" (appropriate) must beat both weaker responses (which are
+    # both under-responses and pay the same -1.5 by design).
+    feedback = 0.3
+    r_isolate = response_reward("ransomware warning", 0, feedback)
+    r_scan = response_reward("ransomware warning", 1, feedback)
+    r_alert = response_reward("ransomware warning", 2, feedback)
+    assert r_isolate > r_scan
+    assert r_isolate > r_alert
+    assert len({r_isolate, r_scan, r_alert}) >= 2
+    # On a mid-severity alert the three actions score three distinct
+    # values, with the appropriate one ("scan") on top:
+    rewards = {a: response_reward("unusual outbound traffic", a, feedback)
+               for a in (0, 1, 2)}
+    assert len(set(rewards.values())) == 3
+    assert rewards[1] > rewards[0] > rewards[2]
+
+
+def test_reward_penalizes_under_response_more_than_over_response():
+    # Doing too little about a severe alert is the expensive failure;
+    # doing too much about a trivial one is merely disruptive.
+    under = response_reward("malware alert", 2, 0.0)          # alert only
+    over = response_reward("password reset request", 0, 0.0)  # isolate
+    appropriate = response_reward("malware alert", 0, 0.0)
+    assert under < over < appropriate
+
+
+def test_reward_feedback_only_modulates():
+    # Feedback shifts the reward but can never flip the ranking of
+    # actions on the same row: the appropriateness gap dominates it.
+    for feedback in (-2.0, 0.0, 2.0):
+        assert response_reward("suspicious login", 2, feedback) \
+            > response_reward("suspicious login", 0, feedback)
 
 
 def test_rule_based_policy_always_scans():
