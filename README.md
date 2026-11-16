@@ -94,30 +94,52 @@ python -m pytest tests/ -q        # run the tests
 ```
 
 Verified output of `python run_all.py` (200 episodes, the 120-row
-synthetic sample, ~26 s of pipeline time on CPU):
+synthetic sample, ~28 s of pipeline time on CPU):
 
 ```
 Data: 120 rows (96 train / 24 test)
-Training: 200 episodes, final-episode reward 40.53, mean of last 10 episodes 40.53
+Training: 200 episodes, final-episode reward 88.27, mean of last 10 episodes 89.82
 A/B evaluation on the held-out test split (environment reward):
-  RL policy        total 9.47 (mean 0.394/step)
-  Rule-based base. total 9.47 (mean 0.394/step)
+  RL policy        total 13.73 (mean 0.572/step)
+  Rule-based base. total 5.23 (mean 0.218/step)
 ```
 
-All 12 pytest tests pass. The Flask app was also verified live (dev
+All 15 pytest tests pass. The Flask app was also verified live (dev
 server and gunicorn): `/health` returns `{"status": "ok",
-"model_loaded": true}` and `/recommend` returns valid actions.
-Docker itself was **not** executed in the verification environment (no
-Docker available there); the Dockerfile runs exactly the commands verified
-natively above.
+"model_loaded": true}` and `/recommend` returns valid actions -- with
+the v2 model it recommends `isolate` for a ransomware warning and
+`alert` for a suspicious login, while the rule-based baseline still
+answers `scan` to everything. Docker itself was **not** executed in the
+verification environment (no Docker available there); the Dockerfile
+runs exactly the commands verified natively above.
 
-**Honest A/B caveat:** the two policies score identically because the
-environment's reward -- as defined in the original script -- does not
-depend on the action taken (reward = threat resolved +/- 1, plus the
-feedback score). The A/B harness therefore verifies the serving split and
-plumbing, not policy quality. Making the reward action-dependent (e.g.
-matching the right response to each threat type) is the obvious next
-improvement. Kubernetes/Grafana from the original Step Five sketch remain
+### v2: an action-dependent reward (Nov 2026)
+
+In v1 the A/B test tied exactly (RL 9.47 vs rule-based 9.47), because
+the original reward -- +1/-1 for the row's recorded `threat_resolved`
+flag, plus the feedback score -- did not depend on the action the agent
+took. There was nothing to learn, so both policies scored the same.
+
+The v2 reward (in `threat_response/env.py`) grades the *decision*. Each
+alert type has a severity-appropriate first response, following standard
+incident-response practice: **isolate** for ransomware warnings and
+malware alerts (contain the host), **scan** for unusual outbound traffic
+and phishing email (investigate and scope), **alert** for suspicious
+logins and password reset requests (notify and verify). The reward is
++2.0 for the appropriate response, -1.5 for an under-response (weaker
+than the alert calls for -- the expensive failure in security
+operations) and -0.5 for an over-response (stronger than needed --
+disruptive but safe), plus the normalized feedback scaled by 0.5 as a
+modulation term. The feedback term is the same for every action on a
+given row, so it can never make a wrong response beat the right one.
+
+Result, same evaluation protocol as v1 (same data, same 96/24 split,
+seed 42, untouched always-scan baseline): **the RL policy now beats the
+baseline, 13.73 to 5.23** on the held-out test split. For scale, an
+oracle that always picks the appropriate action would score 47.73, so
+at the default 200 episodes the agent captures part of the available
+gain; with the original script's 1000 episodes it reaches 32.23 vs the
+same 5.23. Kubernetes/Grafana from the original Step Five sketch remain
 unimplemented; Docker + the Prometheus `/metrics` endpoint are what was
 built.
 
